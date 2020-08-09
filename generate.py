@@ -39,12 +39,27 @@ class Struc:
         self.fields.append(field)
         self.field_by_type[field.type].append(field)
 
+    @property
+    def fingerprint(self):
+        fingerprint = []
+        for field in self.fields:
+            if field.type == Type.Int or field.type == Type.UInt:
+                fingerprint.append("i" + str(field.size * 8))
+            elif field.type == Type.Float:
+                fingerprint.append("f" + str(field.size * 8))
+            elif field.type == Type.Pointer:
+                # TODO: make it better
+                fingerprint.append("<" + field.struc.fingerprint + ">")
+            else:
+                assert False
+        return "-".join(fingerprint)
+
     @staticmethod
     def get_by_id(id):
         return STRUCS[id]
 
     @staticmethod
-    def generate_random():
+    def generate_random(embedded):
         global NEXT_STRUC_ID
         struc_id = NEXT_STRUC_ID
         NEXT_STRUC_ID += 1
@@ -56,6 +71,9 @@ class Struc:
             if NEXT_STRUC_ID <= 2:
                 field_type = random.choice(
                     [Type.Int, Type.UInt, Type.Float])
+            elif not embedded:
+                field_type = random.choice(
+                    [Type.Int, Type.UInt, Type.Float, Type.Pointer])
             else:
                 field_type = random.choice(list(Type))
             field_size = Field.get_random_size(field_type)
@@ -134,23 +152,28 @@ class Func:
                         name, field.name), field.struc.fields)
 
     @staticmethod
-    def generate_random():
+    def generate_random(use_all_strucs):
         global NEXT_FUNC_ID
         func_id = NEXT_FUNC_ID
         NEXT_FUNC_ID += 1
         func = Func(func_id)
         FUNCS[func_id] = func
-        arg_count = random.randint(*ARG_COUNT_LIMIT)
-        for i in range(arg_count):
-            arg_name = "_{}".format(i)
-            arg_type = random.choice(
-                [Type.Int, Type.UInt, Type.Float, Type.Pointer])
-            arg_size = Argument.get_random_size(arg_type)
-            arg_struc = None
-            if arg_type == Type.Pointer:
-                arg_struc = random.choice(list(STRUCS.values()))
-            func.add_argument(
-                Argument(arg_name, arg_type, arg_size, arg_struc))
+        if not use_all_strucs:
+            arg_count = random.randint(*ARG_COUNT_LIMIT)
+            for i in range(arg_count):
+                arg_name = "_{}".format(i)
+                arg_type = random.choice(
+                    [Type.Int, Type.UInt, Type.Float, Type.Pointer])
+                arg_size = Argument.get_random_size(arg_type)
+                arg_struc = None
+                if arg_type == Type.Pointer:
+                    arg_struc = random.choice(list(STRUCS.values()))
+                func.add_argument(
+                    Argument(arg_name, arg_type, arg_size, arg_struc))
+        else:
+            for i in range(len(STRUCS)):
+                func.add_argument(
+                    Argument("_{}".format(i), Type.Pointer, 8, Struc.get_by_id(i + 1)))
         return func
 
     @staticmethod
@@ -175,7 +198,7 @@ class Func:
             return "    {0} = use({0});\n".format(arg.name)
     
     def get_signature(self):
-        s = "void {}(".format(self.name)
+        s = "__declspec(noinline) void {}(".format(self.name)
         s += ", ".join(map(str, self.args))
         s += ")"
         return s
@@ -267,11 +290,11 @@ class Main(Func):
         return s
 
 
-def generate(struc_count, func_count, output):
+def generate(struc_count, func_count, output, gen_opt):
     for _ in range(struc_count):
-        Struc.generate_random()
+        Struc.generate_random("no_embedded" not in gen_opt)
     for _ in range(func_count):
-        Func.generate_random()
+        Func.generate_random("all_strucs_per_func" in gen_opt)
     with open(output, "w") as f:
         with open("preamble.cxx", "r") as preamble:
             f.write(preamble.read())
@@ -285,6 +308,7 @@ def generate(struc_count, func_count, output):
         f.write("\n".join(map(str, FUNCS.values())))
         f.write("\n")
         f.write(str(Main()))
+    return STRUCS
 
 
 def main():
@@ -295,8 +319,11 @@ def main():
                         default=10, help="Amount of strucs to generate")
     parser.add_argument("-f", "--funcs", dest="func_count", type=int,
                         default=100, help="Amount of functions to generate")
+    parser.add_argument("--gen-opt", dest="gen_opt", nargs="+",
+                        help="Generator options")
     args = parser.parse_args()
-    generate(args.struc_count, args.func_count, args.output)
+    generate(args.struc_count, args.func_count,
+             args.output, args.gen_opt)
 
 
 if __name__ == "__main__":
